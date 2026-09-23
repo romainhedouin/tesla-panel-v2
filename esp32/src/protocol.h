@@ -26,10 +26,12 @@ constexpr uint8_t STATUS_ERROR = 0x01;
 constexpr size_t HEADER_SIZE = 5;           // 1 byte type + 4 bytes length
 constexpr size_t RESPONSE_HEADER_SIZE = 5;  // 1 byte status + 4 bytes length
 
-// Far above the ~6.2KB a 64x32 PPM frame actually needs - see protocol.py
-// for the full reasoning (a length past this means a desynced/corrupted
-// stream, not a legitimately large command).
-constexpr uint32_t MAX_PAYLOAD_SIZE = 65536;
+// Comfortably above the ~6.2KB a 64x32 PPM frame needs - a length past
+// this means a desynced/corrupted stream, not a legitimately large command
+// (see protocol.py). Smaller than the Pi's 64KB because the receive buffer
+// is statically allocated, and 64KB of the ESP32's RAM starved the
+// Bluetooth stack into crashing on connect.
+constexpr uint32_t MAX_PAYLOAD_SIZE = 8192;
 
 // Reads a big-endian uint32 starting at buf[offset].
 inline uint32_t readU32BE(const uint8_t *buf) {

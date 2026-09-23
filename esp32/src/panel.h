@@ -2,23 +2,31 @@
 // class exposing handleImage/handleKill/handleSetBrightness, each raising/
 // returning an error message on invalid input rather than crashing).
 //
-// Pin mapping: left at the library's defaults (see HUB75_I2S_CFG in
-// ESP32-HUB75-MatrixPanel-I2S-DMA.h) since the exact wiring of the actual
-// adapter board isn't known yet - no hardware to verify against. Expect to
-// revisit PANEL_R1_PIN etc. below once the board arrives.
+// Pin mapping: see adapter_pins.h - matches the seengreat "RGB Matrix
+// Adapter Board (E)" rev 2.2, confirmed against real hardware.
 #pragma once
 
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 
+#include "adapter_pins.h"
 #include "protocol.h"
 
 class Panel {
  public:
   Panel() {
-    HUB75_I2S_CFG cfg(64, 32, 1);  // width, height, chain length - matches panel.py
-    cfg.double_buff = true;        // flicker-free: draw to the back buffer, flip on swap
+    HUB75_I2S_CFG cfg(64, 32, 1, AdapterPinsV2());  // width, height, chain length - matches panel.py
+    // Single-buffered: a second DMA framebuffer doesn't fit in internal RAM
+    // alongside the classic Bluetooth stack on Arduino core 3.x. A 64x32
+    // frame is drawn fast enough that tearing isn't visible.
+    cfg.double_buff = false;
+    // This adapter/panel latches data on the other clock edge: with the
+    // library's default (true), white pixels fringed into neighbouring
+    // columns, worst on the bottom half. Found with main_test_pattern.cpp.
+    cfg.clkphase = false;
     display_ = new MatrixPanel_I2S_DMA(cfg);
-    display_->begin();
+    if (!display_->begin()) {
+      Serial.println("[-] HUB75 panel failed to start (not enough DMA memory?)");
+    }
     display_->setBrightness8(255);
     display_->clearScreen();
     display_->flipDMABuffer();

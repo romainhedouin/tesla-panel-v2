@@ -1,62 +1,71 @@
-# ESP32 firmware (in progress)
+# ESP32 firmware
 
-Alternative to the Raspberry Pi, targeting the [HUB75 adapter for
-ESP32-DevKitC V4 / ESP32-S3 DevKitC-1](https://www.amazon.fr/dp/B0FVGCF1RW).
-Written and compile-verified with [PlatformIO](https://platformio.org/)
-(`pip install platformio`) without the physical board in hand - `pio run`
-only compiles/links, it doesn't need real hardware. **Nothing here has
-been flashed to or tested on real hardware yet.**
+Runs the panel from an ESP32 instead of the Raspberry Pi, using the
+[HUB75 adapter for ESP32-DevKitC V4 / ESP32-S3 DevKitC-1](https://www.amazon.fr/dp/B0FVGCF1RW)
+(seengreat "RGB Matrix Adapter Board (E)"). Built with
+[PlatformIO](https://platformio.org/) (`pip install platformio`).
 
-## Why two environments
+| Environment | Board | Transport | Status |
+|---|---|---|---|
+| `esp32-classic` | ESP32-DevKitC V4 | Classic Bluetooth (SPP), same as the Pi | **Works end to end** (adapter rev 2.2, 64x32 panel, Pixel 9) |
+| `esp32-s3-ble` | ESP32-S3-DevKitC-1 | BLE (the S3 has no classic Bluetooth) | Compiles only - never run on hardware |
+| `esp32-test-pattern` | ESP32-DevKitC V4 | none | Static diagnostic pattern - quickest panel wiring/timing check |
 
-That adapter board is designed to take either dev board, and the two are
-not interchangeable for our purposes: the original ESP32 has classic
-Bluetooth (BR/EDR), the S3 dropped it entirely (BLE only). That's a
-protocol-level fork, not a config option:
+## Setup (esp32-classic)
 
-- **`esp32-classic`** (`src/main_classic.cpp`) - original ESP32. Uses
-  Arduino's `BluetoothSerial` for RFCOMM/SPP, which registers the same
-  standard SPP UUID (`00001101-...`) the Android app already targets via
-  `createRfcommSocketToServiceRecord()` - no app-side changes needed to
-  point it at this instead of the Pi.
-- **`esp32-s3-ble`** (`src/main_ble.cpp`) - ESP32-S3. No classic Bluetooth
-  radio exists on this chip, so this speaks BLE GATT instead: a custom
-  service with a write characteristic (phone → board) and a notify
-  characteristic (board → phone). **The Android app has no BLE client yet
-  - this firmware alone doesn't make the S3 path usable end to end.**
+1. With everything unpowered, plug the ESP32 into the adapter and the
+   panel's ribbon cable into the adapter's HUB75 port.
+2. Power the panel through the adapter's USB-C or DC jack (5V, 4A+). The
+   ESP32's own USB only powers the ESP32.
+3. Plug the ESP32's USB into the computer and flash:
+   ```
+   cd esp32
+   pio run -e esp32-test-pattern -t upload   # optional: crisp white lines + red/green/blue dots
+   pio run -e esp32-classic -t upload
+   ```
+4. On the phone, pair with **`teslapi-esp32`** in Bluetooth settings.
+   Android will then say "Can't connect" - that's normal, it only means
+   the ESP32 has no audio profile.
+5. In the TeslaLED app, tap the transport button (shows "PI") → **ESP32
+   Standard**, and enter the ESP32's Bluetooth address (shown in the
+   phone's Bluetooth device details). For this board: `68:09:47:F8:B5:9A`.
 
-`build_src_filter` in `platformio.ini` picks the right entry point per
-environment; everything else (`protocol.h`, `panel.h`) is shared.
+## Things to know
 
-## Structure
+- **Pin mapping** (`src/adapter_pins.h`) matches none of the library
+  defaults, and differs between adapter revisions V1.x and V2.x - check
+  the revision printed on the board
+  ([seengreat wiki](https://seengreat.com/wiki/186/rgb-matrix-adapter-board-e)).
+- **Clock phase is flipped** (`clkphase = false` in `panel.h`). With the
+  library default, white pixels fringed into neighbouring columns (colour
+  channels a pixel apart), worst on the bottom half. Solid colours hide
+  this; the test pattern's thin white lines show it.
+- **The Arduino core is pinned to 3.3.12** in `platformio.ini` (via the
+  pioarduino platform). PlatformIO's stock platform ships core 2.0.17,
+  which Android 17 can't connect to over Bluetooth. Core 4.0 disables
+  `BluetoothSerial` by default, so don't upgrade blindly.
+- **RAM is tight.** Bluetooth crashes on connect if it runs short, so:
+  Bluetooth starts before the panel, BLE memory is released, the panel
+  is single-buffered, and messages are capped at 8KB (the Pi allows
+  64KB; a frame is ~6.2KB). Free heap is printed at boot - ~79KB today.
+- **Incoming Bluetooth data bypasses `BluetoothSerial`'s 512-byte queue**,
+  which silently drops overflow, and goes into an 8KB buffer instead.
+- **Serial monitor at 115200** shows boot, connect and error messages.
 
-- `protocol.h` - wire protocol, mirrors `protocol.py` at the repo root
-  byte-for-byte (same command values, same length-prefixed framing, same
-  response shape, same PPM parser). Transport-agnostic: only parses bytes
-  already in a buffer, never touches Bluetooth directly.
-- `panel.h` - HUB75 driving wrapper, mirrors `panel.py`'s role, built on
-  [ESP32-HUB75-MatrixPanel-DMA](https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA)
-  (confirmed to support ESP32/S2/S3). Double-buffered
-  (`SwapOnVSync`-equivalent) for the same flicker-free updates as the Pi.
-- `main_classic.cpp` / `main_ble.cpp` - the two entry points above.
+## Code
 
-## What's still unverified / unknown
+- `main_classic.cpp` / `main_ble.cpp` - the two entry points, chosen per
+  environment by `build_src_filter` in `platformio.ini`.
+- `protocol.h` - wire protocol, mirrors `protocol.py` at the repo root.
+- `panel.h` - HUB75 wrapper (mirrors `panel.py`), built on
+  [ESP32-HUB75-MatrixPanel-DMA](https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA).
+- `adapter_pins.h` - adapter rev 2.x pin mapping.
+- `main_test_pattern.cpp` - standalone color test, no Bluetooth.
 
-- **Pin mapping**: left at the library's defaults - the adapter board's
-  actual wiring isn't documented anywhere I could check without the
-  hardware. Expect to adjust the `HUB75_I2S_CFG` in `panel.h` once it
-  arrives.
-- **Everything BLE-side is unverified beyond "it compiles"**: MTU
-  negotiation, chunked reassembly under real radio conditions, actual
-  throughput for a 6KB frame split into GATT writes - all need a real S3
-  board and a real BLE central to know if the design holds up.
-- **The Android BLE client doesn't exist yet** - see the custom UUIDs
-  above; a separate, real piece of work.
+## Not yet verified
 
-## Building
-
-```
-cd esp32
-pio run -e esp32-classic   # or -e esp32-s3-ble
-pio run -e esp32-classic -t upload   # once you actually have the board wired up
-```
+- **The S3/BLE path**: the app now has a BLE client (`BleTransport`), but
+  it has never been tested against this firmware on a real S3. The
+  shared fixes (single-buffered panel, 8KB message cap) apply to it; the
+  startup-order and receive-buffer fixes were only made in
+  `main_classic.cpp`.

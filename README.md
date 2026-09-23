@@ -18,8 +18,8 @@ protocol - hardware/transport agnostic, covered by `tests/`), `panel.py`
 (the RGBMatrix hardware wrapper) and `bt_profile.py` (BlueZ D-Bus service
 registration).
 
-`esp32/` is an in-progress port to run instead of the Pi - see its own
-README for status (compile-verified only, no hardware yet).
+`esp32/` runs the panel from an ESP32 instead of the Pi - the classic
+Bluetooth version works end to end; see its README for setup.
 
 There is no CI/CD deploying to the Pi itself: `./deploy.sh` copies these files
 onto the Pi's home directory (`/home/pi/`) by hand and restarts the systemd
